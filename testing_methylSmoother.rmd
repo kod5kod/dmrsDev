@@ -1,0 +1,160 @@
+---
+title: "Testing the methySmoother"
+author: "Lee_Carlin"
+date: "11/11/2017"
+output: html_document
+---
+
+Testing the methylSmoother vs. the BSseq BSsmooth  
+
+Loading the relevant libraries and the B
+```{r loaddata, include=FALSE}
+library('GenomicRanges')  #loading required libraries
+library('bsseq')   #loading required libraries
+library('locfit')
+path = '/Users/lee/Dropbox (Personal)/KeeganFiles/Keegan Korthauer - DC_BSSeq.RData'
+load(file = path) 
+```
+Print the properties of the data:
+```{r}
+DC
+dim(DC) # getting the dimension 
+sampleNames(DC) # getting the sample names
+pData(DC) # getting types of samples
+head(seqnames(DC), n = 20) # getting the 
+```
+One issue is the large size of the data. Let's restrict our analysis by sampling the data:
+```{r}
+start.time <- Sys.time()
+ob_start <- 100000    # 1e+6 -10000
+ob_end <- 200000   # 2e+6 +10000
+M <- data.frame(getCoverage(DC[ob_start:ob_end],  
+                            type = "M", 
+                            what = "perBase")) # Retrieving the Methylation Readouts
+Cov <- data.frame(getCoverage(DC[ob_start:ob_end],  
+                              type = "Cov", 
+                              what = "perBase")) # Retrieving the Coverage Readouts
+
+DCtmp <- BSseq(M = M, Cov = Cov, coef = NULL, se.coef = NULL, trans = NULL, 
+               parameters = NULL, pData = pData(DC[ob_start:ob_end]), 
+               gr = granges(DC[ob_start:ob_end]), 
+               pos = start(DC[ob_start:ob_end]), chr = NULL, 
+               sampleNames = NULL, rmZeroCov = FALSE) # constructing the BSseq object
+end.time <- Sys.time()
+cat("BSseq Object took ",end.time - start.time, " seconds to create\n") 
+
+DCtmp
+
+rm(DC) # removing DC to clear some memory
+```
+
+We smooth the data USING BSseq:
+```{r}
+start.time <- Sys.time()
+# Smoothing the sample using the default parameters:
+ns = 70 #The minimum number of methylation loci in a smoothing window
+h = 1000 #The minimum smoothing window, in bases.
+maxGap = 10^8  #The maximum gap between two methylation loci, before the smoothing is broken across the gap. The default smoothes each chromosome separately.
+DC.fit <- BSmooth(DCtmp, ns = ns, h = h, maxGap = maxGap, parallelBy = "sample", 
+                  mc.preschedule = FALSE, mc.cores = 2, keep.se = FALSE, 
+                  verbose = TRUE)
+
+end.time <- Sys.time()
+cat("BSseq Object took ",end.time - start.time, " seconds to smooth\n") 
+
+print(DC.fit)
+```
+
+Making sure there are no IRanges that are more than 10^8 apart:
+```{R}
+grBase <- granges(DCtmp)
+grBase[IRanges]
+<- max(which(dmrs$idxStart <= start_dmr)) 
+#end_indx <- min(which(dmrs$idxStart >= end_dmr))
+lenEnd<-length(end(grBase))
+dmrs_tuples <- rbind(end(grBase)[-lenEnd],start(grBase)[-1])
+all(diff(dmrs_tuples)<10^8)
+```
+
+Smoothing the same data using methylSmoother:
+```{r, fig.height=7, fig.width=15}
+##parameters:
+minM = 70 # The minimum number of methylation loci in a smoothing window.
+minB = 1000 # The minimum smoothing window, in bases (not indexes).
+sampIndx <- 1 # the index (column number) of the BSseq sample to smooth
+indexes <- 1:100001 # the indexex (row numbers) of the BSseq sample to smooth
+  
+  
+methylSmoother<- function (BSseq, minM = 70, minB = 1000, sampIndx, indexes){
+    ########################
+    ##This function smoothes the samples methylation along each sample of BSseq 
+    ##Args:
+    ##  BSseq: BSseq DMRs object
+    ##  minM: A smoothed BSseq object 
+    ##  minB: a vector specifying the sample indexes of group 1 of the 
+    ##        BSseq object (e.g. c(1,3,5,7,9,11) )
+    ##  sampIndx: a vector specifying the sample indexes of group 2 
+    ##            (e.g. c(2,4,6,8,10,12) )
+    ##  indexes: e.g. 1:5 or 10:20
+    ##Returns:
+    ##  A 
+    ##Requires: library('GenomicRanges'), library('bsseq')
+    ## BASED ON BSseq - BSsmooth
+    ########################
+    ##Getting the coverage readouts per  specific sample, over  specific indexes
+    Cov <- unname(as.array(getCoverage(BSseq, type = "Cov")[indexes, sampIndx])) 
+    ##Getting the methylation readouts per specific sample, overspecific indexes
+    M <- unname(as.array(getCoverage(BSseq, type = "M")[indexes, sampIndx])) 
+    pos <- start(BSseq)[indexes] # getting the position of all hte readouts
+    ##Add checks that positives is ___stopifnot(all(diff(pos) > 0))
+    positives <- which(Cov != 0) # getting the non-zero methylation loci
+    winRatio <- minM / length(positives) # locfit lp parameter 
+    if (length(positives) <= minM){
+        cat("  The number of positive coverage loci is: ", length(positives),"
+            , while the minimum methylation window is: ",minM)
+        stop("the number of positive coverage loci is lower than the minimum 
+              methulation loci windows. Please either decrease the min 
+              methylation loci, or increase the input.\n")
+    }
+    ##Creating a dataframe with the relevant positions and the methylation, 
+    ## making sure there that when M=Cov we take M or Cov - 0.01 to avoid issues
+    methylData <- data.frame(pos = pos[positives], 
+                             M = pmin(pmax(M[positives], 0.01), 
+                                      Cov[positives] - 0.01), 
+                             Cov = Cov[positives])
+    # Applying locfit with local polynomial term
+    fit <- locfit(M ~ lp(pos, nn = winRatio, h = minB),
+                  data = methylData, weights = Cov, family = "binomial", 
+                  maxk = 10000)
+    pp <- preplot(fit, where = "data", band = "local",
+                  newdata = data.frame(pos = pos)) 
+    se.coef <- pp$se.fit
+
+    #plot(pos[positives], pp$coef[positives], type = "p", cex = 0.1)
+    #lines(pos[positives], M[positives], type = "p", col = "red", cex = 0.1)
+    return(list(coef = pp$fit, se.coef = se.coef,
+                trans = pp$trans, minB = minB, minM = minM))
+
+}
+
+
+
+temp <- methylSmoother(DCtmp, minM = minM, minB = minB , sampIndx, indexes)
+
+
+
+#plot(start(BSseq)[indexes] ,unname(as.array(getCoverage(BSseq, type = "M")[indexes, sampIndx])) , type = "l" )
+#lines(start(BSseq)[indexes], temp$coef, col = "red")
+#lines(start(BSseq)[indexes], temp$coef)
+
+```
+
+Testing for parity:
+```{r}
+## Testing for parity:
+digit<-5
+a <- (round(temp$coef,digits = digit))
+b <- round(as.vector(getBSseq(DC.fit, type = "coef")[,1]),digits = digit )
+all(a == b)
+sum(a!=b,na.rm = TRUE)
+```
