@@ -1,0 +1,269 @@
+---
+title: "Smoothing Parameter Variations V1"
+author: "Lee_Carlin"
+date: "11/11/2017"
+output: html_document
+---
+
+Testing the methylSmoother vs. the BSseq BSsmooth  
+
+Loading the relevant libraries and the B
+```{r loaddata, include=FALSE}
+library('GenomicRanges')  #loading required libraries
+library('bsseq')   #loading required libraries
+library('locfit')
+library('ggplot2')
+source('/Users/lee/Dropbox (Personal)/School/Thesis/scripts/myFunctions/methylSmoother.r') 
+path = '/Users/lee/Dropbox (Personal)/KeeganFiles/Keegan Korthauer - DC_BSSeq.RData'
+load(file = path) 
+```
+Print the properties of the data:
+```{r}
+DC
+dim(DC) # getting the dimension 
+sampleNames(DC) # getting the sample names
+pData(DC) # getting types of samples
+head(seqnames(DC), n = 20) # getting the 
+```
+One issue is the large size of the data. Let's restrict our analysis by sampling the data:
+```{r}
+start.time <- Sys.time()
+ob_start <- 1    # 1e+6 -10000
+ob_end <- 100000   # 2e+6 +10000
+M <- data.frame(getCoverage(DC[ob_start:ob_end],  
+                            type = "M", 
+                            what = "perBase")) # Retrieving the Methylation Readouts
+Cov <- data.frame(getCoverage(DC[ob_start:ob_end],  
+                              type = "Cov", 
+                              what = "perBase")) # Retrieving the Coverage Readouts
+
+DCtmp <- BSseq(M = M, Cov = Cov, coef = NULL, se.coef = NULL, trans = NULL, 
+               parameters = NULL, pData = pData(DC[ob_start:ob_end]), 
+               gr = granges(DC[ob_start:ob_end]), 
+               pos = start(DC[ob_start:ob_end]), chr = NULL, 
+               sampleNames = NULL, rmZeroCov = FALSE) # constructing the BSseq object
+end.time <- Sys.time()
+cat("BSseq Object took ",end.time - start.time, " seconds to create\n") 
+
+DCtmp
+
+rm(DC) # removing DC to clear some memory
+```
+
+```{r}
+library(shiny)
+
+# Define UI ----
+ui <- fluidPage(
+  titlePanel("Smoothed Methylation Ratio as a Function of Different Parameters"),
+  fluidRow(
+    column(4,
+      # Copy the line below to make a slider range 
+      sliderInput("slider1", label = h4("Smoothing Range"), min = 0, 
+        max = 100000, value = c(0, 100000))
+    )
+  ),
+  fluidRow(
+    column(3,
+      # Copy the line below to make a slider range 
+      sliderInput("slider2", label = h4("Graph 1: Min Methylation per Window"), min = 10, 
+        max = 200, value = c(70))
+    ),
+    column(3,
+      # Copy the line below to make a slider range 
+      sliderInput("slider3", label = h4("Graph 1: Min Bases per Window"), min = 100, 
+        max = 5000, value = c(1000))
+    ),
+    column(3,
+      # Copy the line below to make a slider range 
+      sliderInput("slider4", label = h4("Graph 2: Min Methylation per Window"), min = 10, 
+        max = 200, value = c(70))
+    ),
+    column(3,
+      # Copy the line below to make a slider range 
+      sliderInput("slider5", label = h4("Graph 2: Min Bases per Window"), min = 100, 
+        max = 5000, value = c(1000))
+    )
+    
+  ),
+  
+  hr(),
+  
+  fluidRow(
+    column(4, verbatimTextOutput("value")),
+    column(4, verbatimTextOutput("range"))
+  ),
+  
+  plotOutput(outputId = "main_plot", height = "600px")
+  
+)
+
+# Define server logic ----
+server <- function(input, output) {
+  output$main_plot <- renderPlot({
+    sampIndx <- 1 # the index (column number) of the BSseq sample to smooth
+    indexes <- 1:100000 # the indexex (row numbers) of the BSseq sample to smooth
+    smoothed_1 <- methylSmoother(DCtmp, minM = input$slider2, minB = input$slider3 , sampIndx, indexes)
+    smoothed_1_y <- smoothed_1$trans(smoothed_1$coef)
+    smoothed_2 <- methylSmoother(DCtmp, minM = input$slider4, minB = input$slider5 , sampIndx, indexes)
+    smoothed_2_y <- smoothed_2$trans(smoothed_2$coef)
+    test_df <- data.frame(pos = start(DCtmp)[input$slider1[1]:input$slider1[2]],y1 = smoothed_1_y[input$slider1[1]:input$slider1[2]], y2 = smoothed_2_y[input$slider1[1]:input$slider1[2]])
+    a <- ggplot(data = test_df, aes(x = pos, y = y1))
+    a+geom_line()+geom_line(aes(x = pos, y = y2, col = "red")) + scale_fill_discrete(name = "Title",labels = c("Graph 1", "Graph 2"))
+    # Change the legend
+    
+    
+  })
+}
+
+# Run the app ----
+shinyApp(ui = ui, server = server)
+
+```
+
+With Different Samples:
+
+
+
+Group Ratio Difference:
+```{r}
+library(shiny)
+
+# Define UI ----
+ui <- fluidPage(
+  titlePanel("Smoothed Methylation Group Ratio Difference as a Function of Different Parameters"),
+  fluidRow(
+    column(4,
+      # Copy the line below to make a slider range 
+      sliderInput("slider1", label = h4("Smoothing Range"), min = 0, 
+        max = 100000, value = c(0, 100000))
+    )
+  ),
+  fluidRow(
+    column(3,
+      # Copy the line below to make a slider range 
+      sliderInput("slider2", label = h4("Graph 1: Min Methylation per Window"), min = 10, 
+        max = 200, value = c(70))
+    ),
+    column(3,
+      # Copy the line below to make a slider range 
+      sliderInput("slider3", label = h4("Graph 1: Min Bases per Window"), min = 100, 
+        max = 5000, value = c(1000))
+    )
+    
+  ),
+  
+  hr(),
+  
+  plotOutput(outputId = "main_plot", height = "600px")
+  
+)
+
+# Define server logic ----
+server <- function(input, output) {
+  output$main_plot <- renderPlot({
+    DC.fit <- BSmooth(DCtmp, ns = input$slider2, h = input$slider3, maxGap = 10^8, parallelBy = "sample", mc.preschedule = FALSE, mc.cores = 2, keep.se = FALSE, verbose = TRUE)
+    stats <- BSmooth.tstat(DC.fit, group1 = c(1,3,5), group2 = c(2,4,6), estimate.var = "same", local.correct = TRUE, maxGap = NULL, qSd = 0.75, k = 101, mc.cores = 1, verbose = TRUE)
+    data <- as.data.frame(getStats(stats))
+    data["diff"] <- data$group2.means-data$group1.means
+    data["pos"] <- start(DCtmp)
+    #test_df <- data.frame(pos = start(DCtmp)[input$slider1[1]:input$slider1[2]],y1 = smoothed_1_y[input$slider1[1]:input$slider1[2]], y2 = smoothed_2_y[input$slider1[1]:input$slider1[2]])
+    a <- ggplot(data = data[input$slider1[1]:input$slider1[2],], aes(x = pos, y = diff))
+    a+geom_line()
+    # Change the legend
+    
+    
+  })
+}
+
+# Run the app ----
+shinyApp(ui = ui, server = server)
+```
+
+```{r}
+
+
+DC.fit70 <- BSmooth(DCtmp, ns = 70, h = 1000, maxGap = 10^8, parallelBy = "sample", mc.preschedule = FALSE, mc.cores = 2, keep.se = FALSE, verbose = TRUE)
+stats70 <- BSmooth.tstat(DC.fit70, group1 = c(1,3,5), group2 = c(2,4,6), estimate.var = "same", local.correct = TRUE, maxGap = NULL, qSd = 0.75, k = 101, mc.cores = 1, verbose = TRUE)
+sdata70 <<- as.data.frame(getStats(stats70))
+sdata70["diff"] <- sdata70$group2.means-sdata70$group1.means
+sdata70["pos"] <- start(DCtmp)
+
+DC.fit40 <- BSmooth(DCtmp, ns = 40, h = 1000, maxGap = 10^8, parallelBy = "sample", mc.preschedule = FALSE, mc.cores = 2, keep.se = FALSE, verbose = TRUE)
+stats40 <- BSmooth.tstat(DC.fit40, group1 = c(1,3,5), group2 = c(2,4,6), estimate.var = "same", local.correct = TRUE, maxGap = NULL, qSd = 0.75, k = 101, mc.cores = 1, verbose = TRUE)
+sdata40 <<- as.data.frame(getStats(stats40))
+sdata40["diff"] <- sdata40$group2.means-sdata40$group1.means
+sdata40["pos"] <- start(DCtmp)
+
+DC.fit100 <- BSmooth(DCtmp, ns = 100, h = 1000, maxGap = 10^8, parallelBy = "sample", mc.preschedule = FALSE, mc.cores = 2, keep.se = FALSE, verbose = TRUE)
+stats100 <- BSmooth.tstat(DC.fit100, group1 = c(1,3,5), group2 = c(2,4,6), estimate.var = "same", local.correct = TRUE, maxGap = NULL, qSd = 0.75, k = 101, mc.cores = 1, verbose = TRUE)
+sdata100 <<- as.data.frame(getStats(stats100))
+sdata100["diff"] <- sdata100$group2.means-sdata100$group1.means
+sdata100["pos"] <- start(DCtmp)
+```
+
+
+Group Ratio Difference - fixed parameters, but varying the y and range:
+```{r}
+library(shiny)
+
+# Define UI ----
+ui <- fluidPage(
+  titlePanel("Smoothed Methylation Group Ratio Difference as a Function of Different Parameters"),
+  fluidRow(
+    column(6,
+      # Copy the line below to make a slider range 
+      sliderInput("slider1", label = h4("Smoothing Range"), min = 0, 
+        max = 100000, value = c(0, 100000))
+    ),
+      column(6,
+      # Copy the line below to make a slider range 
+      radioButtons(inputId = "slider3", label = h4("Graph 1: Choose Min Methylation"), 
+                   choiceNames = c("40","70","100"),
+                   choiceValues = c("sdata40","sdata70","sdata100"),
+                    #c("rawSDs" = "rawSds","tstatSD" = "tstat.sd","Group1 Mean" = "group1.means","Group2 Mean" = "group2.means","tstat" = "tstat","difference" = "diff"),
+                   selected = "sdata70",inline = TRUE)
+    )
+  ),
+  fluidRow(
+    column(12,
+      # Copy the line below to make a slider range 
+      radioButtons(inputId = "slider2", label = h4("Graph 1: Choose Statistic"), 
+                   choiceNames = c("rawSDs","tstatSD","Group1 Mean","Group2 Mean","tstat","difference"),
+                   choiceValues = c("rawSds","tstat.sd","group1.means","group2.means","tstat","diff"),
+                    #c("rawSDs" = "rawSds","tstatSD" = "tstat.sd","Group1 Mean" = "group1.means","Group2 Mean" = "group2.means","tstat" = "tstat","difference" = "diff"),
+                   selected = "diff",inline = TRUE)
+    )
+    
+  ),
+  
+  hr(),
+  
+  plotOutput(outputId = "main_plot", height = "600px")
+  
+)
+
+    
+# Define server logic ----
+server <- function(input, output) {
+  output$main_plot <- renderPlot({
+    
+    #test_df <- data.frame(pos = start(DCtmp)[input$slider1[1]:input$slider1[2]],y1 = smoothed_1_y[input$slider1[1]:input$slider1[2]], y2 = smoothed_2_y[input$slider1[1]:input$slider1[2]])
+    var <- input$slider2
+    tempData <- get(input$slider3)[input$slider1[1]:input$slider1[2],]
+    a <- ggplot(data = tempData, aes(x = pos, y = tempData[var]))
+    a+geom_line()
+    # Change the legend
+    
+    
+  })
+}
+
+# Run the app ----
+shinyApp(ui = ui, server = server)
+```
+
+
+
+
+
